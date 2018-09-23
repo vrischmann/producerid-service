@@ -187,6 +187,18 @@ impl Processor {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+enum Status {
+    OK,
+    ERROR,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StatusResponse {
+    status: Status,
+    error: Option<String>,
+}
+
 struct Server {
     http_server: tiny_http::Server,
     processor: Processor,
@@ -205,7 +217,7 @@ impl Server {
     }
 
     fn process_one(&mut self, mut hreq: tiny_http::Request) -> Result<(), Error> {
-        let response = match hreq.url().as_ref() {
+        let response: serde_json::Value = match hreq.url().as_ref() {
             "/history/pod" => {
                 #[derive(Deserialize)]
                 struct Request {
@@ -217,11 +229,9 @@ impl Server {
 
                 let all_ids = self.processor.pod_history(&r.pod_name)?;
 
-                let json = json!({
+                json!({
                     "producer_ids": all_ids,
-                });
-
-                json.to_string()
+                })
             }
             "/history/producer" => {
                 #[derive(Deserialize)]
@@ -234,11 +244,9 @@ impl Server {
 
                 let all_pods = self.processor.producer_history(r.producer_id)?;
 
-                let json = json!({
+                json!({
                     "pods": all_pods,
-                });
-
-                json.to_string()
+                })
             }
             "/acquire" => {
                 #[derive(Deserialize)]
@@ -246,18 +254,17 @@ impl Server {
                     pod_name: String,
                 }
 
-                let reader = hreq.as_reader();
-                let r: Request = serde_json::from_reader(reader)?;
+                let r: Request = serde_json::from_reader(hreq.as_reader())?;
 
-                if r.pod_name.is_empty() {}
-
-                let producer_id = self.processor.acquire(&r.pod_name)?;
-
-                let json = json!({
-                    "producer_id": producer_id,
-                });
-
-                json.to_string()
+                match r.pod_name.is_empty() {
+                    true => serde_json::to_value(StatusResponse {
+                        status: Status::ERROR,
+                        error: Some("pod name can't be empty".to_owned()),
+                    })?,
+                    false => json!({
+                        "producer_id": self.processor.acquire(&r.pod_name)?
+                    }),
+                }
             }
             "/release" => {
                 #[derive(Deserialize)]
@@ -265,17 +272,30 @@ impl Server {
                     pod_name: String,
                 }
 
-                let reader = hreq.as_reader();
-                let r: Request = serde_json::from_reader(reader)?;
+                let r: Request = serde_json::from_reader(hreq.as_reader())?;
 
-                self.processor.release(&r.pod_name)?;
+                match r.pod_name.is_empty() {
+                    true => serde_json::to_value(StatusResponse {
+                        status: Status::ERROR,
+                        error: Some("pod name can't be empty".to_owned()),
+                    })?,
+                    false => {
+                        self.processor.release(&r.pod_name)?;
 
-                json!({"status": "OK"}).to_string()
+                        serde_json::to_value(StatusResponse {
+                            status: Status::OK,
+                            error: None,
+                        })?
+                    }
+                }
             }
-            _ => json!({"status": "OK"}).to_string(),
+            _ => serde_json::to_value(StatusResponse {
+                status: Status::OK,
+                error: None,
+            })?,
         };
 
-        hreq.respond(tiny_http::Response::from_string(response))?;
+        hreq.respond(tiny_http::Response::from_string(response.to_string()))?;
         Ok(())
     }
 
