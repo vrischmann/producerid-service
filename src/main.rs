@@ -136,13 +136,12 @@ impl Processor {
         let vals: Vec<String> = self.conn.lrange(key, 0, -1)?;
 
         let iter = vals.into_iter();
-        let mapped: Result<Vec<_>, JSONError> = iter.map(|v| serde_json::from_str(&v)).collect();
+        let mapped = iter
+            .map(|v| serde_json::from_str(&v))
+            .collect::<Result<Vec<_>, JSONError>>()
+            .map_err(|e| Error::from(e));
 
-        // Wut ?
-        match mapped {
-            Ok(v) => Ok(v),
-            Err(e) => Err(Error::JSON(e)),
-        }
+        mapped
     }
 
     fn release(&mut self, pod_name: &str) -> Result<(), Error> {
